@@ -1,0 +1,6 @@
+frida
+frida-tools
+requests
+urllib3
+colorama
+python-dotenv

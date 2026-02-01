@@ -173,20 +173,19 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
-# Original package
-com.werewolfapps.online/
-
-# APK data
-com.mentalist.mobile.apk
-com.mentalist.mobile.apk.idsig
-*.keystore
-
-# Data
-data/
-
 # Cursor  
 #  Cursor is an AI-powered code editor.`.cursorignore` specifies files/directories to 
 #  exclude from AI features like autocomplete and code analysis. Recommended for sensitive data
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# APK data
+com.werewolfapps.online/
+*.apk
+*.keystore
+*.idsig
+
+# Data
+.mentalist_data/
+config.txt

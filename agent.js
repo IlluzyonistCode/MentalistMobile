@@ -10,7 +10,7 @@ function waitForJava() {
 }
 
 waitForJava().then(() => {
-    Java.perform(function () {
+    Java.perform(function() {
         let menuView;
         let iconView;
         let windowManager;
@@ -31,8 +31,14 @@ waitForJava().then(() => {
         let predictButton;
         let predictResultTextView;
         let menuParamsRef = null;
+        let globalOriginalSend = null;
 
         const messageQueue = [];
+
+        const ENABLE_LOBBY_INVITE_SPAM = true;
+
+        let latestRealWebSocketInstance = null;
+        let lobbyInviteSpamAlreadySent = false;
 
         const gameState = {
             playersById: {},
@@ -123,7 +129,7 @@ waitForJava().then(() => {
         function toggleMenu() {
             if (!menuView || !windowManager || !iconView) return;
 
-            Java.scheduleOnMainThread(function () {
+            Java.scheduleOnMainThread(function() {
                 try {
                     const View = Java.use('android.view.View');
                     const castedMenu = Java.cast(menuView, View);
@@ -157,7 +163,7 @@ waitForJava().then(() => {
         function scheduleUiUpdate() {
             if (uiUpdateScheduled) return;
             uiUpdateScheduled = true;
-            Java.scheduleOnMainThread(function () {
+            Java.scheduleOnMainThread(function() {
                 try { updateUI(); } finally { uiUpdateScheduled = false; }
             });
         }
@@ -295,21 +301,38 @@ waitForJava().then(() => {
             messageQueue.push(JSON.stringify({ type: 'log', message: '[WS HOOKS] Starting passive WebSocket monitoring...' }));
             let wsMessageCount = 0;
 
-            try {
-                const originalProcessNextFrame = RealWebSocket.processNextFrame;
-                RealWebSocket.processNextFrame.implementation = function () {
-                    const result = originalProcessNextFrame.call(this);
-                    messageQueue.push(JSON.stringify({ type: 'log', message: '[WS] processNextFrame() -> ' + result }));
-                    return result;
-                };
-                messageQueue.push(JSON.stringify({ type: 'log', message: '[WS HOOKS] ✓ processNextFrame hooked' }));
-            } catch (e) {
-                messageQueue.push(JSON.stringify({ type: 'log', message: '[WS HOOKS] processNextFrame not available' }));
+            // Функция для отправки одного инвайта - ВЫНЕСТИ СЮДА
+            function sendSingleInvite(targetPlayerId) {
+                if (!latestRealWebSocketInstance) {
+                    messageQueue.push(JSON.stringify({ type: 'log', message: '[INVITE] No WebSocket instance available' }));
+                    return false;
+                }
+
+                if (!targetPlayerId) {
+                    messageQueue.push(JSON.stringify({ type: 'log', message: '[INVITE] No target player ID provided' }));
+                    return false;
+                }
+
+                const invitePayload = `42["friends-game-invite-player","{\\"targetPlayerId\\":\\"${targetPlayerId}\\"}"]`;
+
+                try {
+                    if (globalOriginalSend && latestRealWebSocketInstance) {
+                        globalOriginalSend.call(latestRealWebSocketInstance, invitePayload);
+                    } else {
+                        latestRealWebSocketInstance.send(invitePayload);
+                    }
+                    return true;
+                } catch (e) {
+                    messageQueue.push(JSON.stringify({ type: 'log', message: '[INVITE] Send failed: ' + e }));
+                    return false;
+                }
             }
+
+            messageQueue.push(JSON.stringify({ type: 'log', message: '[WS HOOKS] Skipping processNextFrame (causes connection issues)' }));
 
             try {
                 const originalOnReadMessageString = RealWebSocket.onReadMessage.overload('java.lang.String');
-                RealWebSocket.onReadMessage.overload('java.lang.String').implementation = function (text) {
+                RealWebSocket.onReadMessage.overload('java.lang.String').implementation = function(text) {
                     wsMessageCount++;
                     messageQueue.push(JSON.stringify({ type: 'log', message: '[WS ✓] onReadMessage length=' + text.length + ', preview: ' + text.substring(0, 50) }));
                     messageQueue.push(JSON.stringify({ type: 'ws_message', direction: 'INBOUND', data: text, dataType: 'String' }));
@@ -317,6 +340,16 @@ waitForJava().then(() => {
                     if (env) {
                         messageQueue.push(JSON.stringify({ type: 'log', message: '[WS EVENT] ' + env.event }));
                         onEvent(env.event, env.payload);
+
+                        if (env.event === 'host-changed') {
+                            try {
+                                latestRealWebSocketInstance = this;
+                                lobbyInviteSpamAlreadySent = false;
+                                messageQueue.push(JSON.stringify({ type: 'event', event: 'host-changed' }));
+                            } catch (e) {
+                                messageQueue.push(JSON.stringify({ type: 'log', message: '[WS] host-changed error: ' + e }));
+                            }
+                        }
                     } else {
                         messageQueue.push(JSON.stringify({ type: 'log', message: '[WS] Could not parse as Socket.IO event: ' + text.substring(0, 30) }));
                     }
@@ -330,7 +363,7 @@ waitForJava().then(() => {
             try {
                 const ByteString = Java.use('okio.ByteString');
                 const originalOnReadMessageBytes = RealWebSocket.onReadMessage.overload('okio.ByteString');
-                RealWebSocket.onReadMessage.overload('okio.ByteString').implementation = function (bytes) {
+                RealWebSocket.onReadMessage.overload('okio.ByteString').implementation = function(bytes) {
                     messageQueue.push(JSON.stringify({ type: 'log', message: '[WS ✓] onReadMessage(ByteString)' }));
                     try {
                         const text = bytes.utf8();
@@ -339,6 +372,16 @@ waitForJava().then(() => {
                         if (env) {
                             messageQueue.push(JSON.stringify({ type: 'log', message: '[WS EVENT] ' + env.event }));
                             onEvent(env.event, env.payload);
+
+                            if (env.event === 'host-changed') {
+                                try {
+                                    latestRealWebSocketInstance = this;
+                                    lobbyInviteSpamAlreadySent = false;
+                                    messageQueue.push(JSON.stringify({ type: 'event', event: 'host-changed' }));
+                                } catch (e) {
+                                    messageQueue.push(JSON.stringify({ type: 'log', message: '[WS] host-changed error: ' + e }));
+                                }
+                            }
                         }
                     } catch (e) {
                         messageQueue.push(JSON.stringify({ type: 'log', message: '[WS] ByteString decode error: ' + e }));
@@ -351,11 +394,13 @@ waitForJava().then(() => {
             }
 
             try {
-                const originalSendString = RealWebSocket.send.overload('java.lang.String');
-                RealWebSocket.send.overload('java.lang.String').implementation = function (text) {
+                globalOriginalSend = RealWebSocket.send.overload('java.lang.String');
+
+                RealWebSocket.send.overload('java.lang.String').implementation = function(text) {
                     messageQueue.push(JSON.stringify({ type: 'log', message: '[WS ↑] send(String) length=' + text.length }));
                     messageQueue.push(JSON.stringify({ type: 'ws_message', direction: 'OUTBOUND', data: text, dataType: 'String' }));
-                    return originalSendString.call(this, text);
+
+                    return globalOriginalSend.call(this, text);
                 };
                 messageQueue.push(JSON.stringify({ type: 'log', message: '[WS HOOKS] ✓ send(String) hooked' }));
             } catch (e) {
@@ -366,7 +411,7 @@ waitForJava().then(() => {
 
             try {
                 const originalLoopReaderMethod = RealWebSocket.loopReader;
-                RealWebSocket.loopReader.implementation = function () {
+                RealWebSocket.loopReader.implementation = function() {
                     messageQueue.push(JSON.stringify({ type: 'log', message: '[WS] loopReader started' }));
                     try {
                         return originalLoopReaderMethod.call(this);
@@ -382,7 +427,7 @@ waitForJava().then(() => {
             try {
                 const WebSocketListener = Java.use('okhttp3.WebSocketListener');
                 const originalOnMessageString = WebSocketListener.onMessage.overload('okhttp3.WebSocket', 'java.lang.String');
-                WebSocketListener.onMessage.overload('okhttp3.WebSocket', 'java.lang.String').implementation = function (webSocket, text) {
+                WebSocketListener.onMessage.overload('okhttp3.WebSocket', 'java.lang.String').implementation = function(webSocket, text) {
                     messageQueue.push(JSON.stringify({ type: 'log', message: '[WS Listener ✓] onMessage length=' + text.length }));
                     messageQueue.push(JSON.stringify({ type: 'ws_message', direction: 'INBOUND', data: text, dataType: 'String' }));
                     const env = parseSocketIoEnvelope(text);
@@ -411,86 +456,19 @@ waitForJava().then(() => {
                 name: 'com.mentalist.ResponseInterceptor',
                 implements: [Interceptor],
                 methods: {
-                    intercept: function (chain) {
+                    intercept: function(chain) {
                         const request = chain.request();
                         const url = request.url().toString();
 
                         const response = chain.proceed(request);
 
-                        const targetPlayerId = '3852699d-e38b-40a9-ac2b-197ab78593cd';
-                        const isPlayerProfile = url.includes('/players/' + targetPlayerId);
-                        const isFriendsMulti = url.includes('/friends/multiple/minimized');
-                        const isFriendsMini = url.includes('/friends/' + targetPlayerId + '/minimized');
-                        const isTargetUrl = isPlayerProfile || isFriendsMulti || isFriendsMini;
-
-                        if (!response.isSuccessful() || response.body() == null || !isTargetUrl) return response;
-
-                        const responseBody = response.body();
-                        const mediaType = responseBody.contentType();
-                        let responseBodyString;
-
-                        try {
-                            responseBodyString = responseBody.string();
-                        } catch (readError) {
-                            messageQueue.push(JSON.stringify({ type: 'log', message: '[HTTP READ ERROR] ' + readError.toString() }));
-                            return response;
-                        }
-
-                        try {
-                            const newUsername = '💗 Beril 💗';
-                            const newIconId = 'O6k';
-                            const newIconColor = '#e30b5d';
-                            let modifiedBodyString = responseBodyString;
-
-                            if (url.includes('/players/' + targetPlayerId)) {
-                                let data = safeJsonParse(responseBodyString);
-                                if (data && data.id === targetPlayerId) {
-                                    data.username = newUsername;
-                                    data.equippedProfileIconId = newIconId;
-                                    data.equippedProfileIconColor = newIconColor;
-                                    data.equippedProfileIconBorderId = 'DT-';
-                                    data.clanTag = '';
-                                    modifiedBodyString = JSON.stringify(data);
-                                }
-                            }
-                            else if (url.includes('/friends/multiple/minimized')) {
-                                let data = safeJsonParse(responseBodyString);
-                                if (data && Array.isArray(data)) {
-                                    data.forEach(playerArray => {
-                                        if (Array.isArray(playerArray) && playerArray[0] === targetPlayerId) {
-                                            playerArray[1] = newUsername;
-                                            playerArray[3] = newIconId;
-                                            playerArray[4] = newIconColor;
-                                            playerArray[10] = '';
-                                        }
-                                    });
-                                    modifiedBodyString = JSON.stringify(data);
-                                }
-                            }
-                            else if (url.includes('/friends/' + targetPlayerId + '/minimized')) {
-                                let data = safeJsonParse(responseBodyString);
-                                if (Array.isArray(data) && data[0] === targetPlayerId) {
-                                    data[1] = newUsername;
-                                    data[3] = newIconId;
-                                    data[4] = newIconColor;
-                                    data[10] = '';
-                                    modifiedBodyString = JSON.stringify(data);
-                                }
-                            }
-
-                            const newBody = ResponseBody.create(mediaType, modifiedBodyString);
-                            return response.newBuilder().body(newBody).build();
-                        } catch (e) {
-                            messageQueue.push(JSON.stringify({ type: 'log', message: '[HTTP MODIFY ERROR] ' + e.toString() }));
-                            const newBody = ResponseBody.create(mediaType, responseBodyString);
-                            return response.newBuilder().body(newBody).build();
-                        }
+                        return response;
                     }
                 }
             });
 
             const originalNewCall = OkHttpClient.newCall;
-            OkHttpClient.newCall.implementation = function (request) {
+            OkHttpClient.newCall.implementation = function(request) {
                 const interceptors = this.interceptors();
 
                 let alreadyAdded = false;
@@ -518,7 +496,7 @@ waitForJava().then(() => {
 
             const OkHttpClientBuilder = Java.use('okhttp3.OkHttpClient$Builder');
             const originalBuild = OkHttpClientBuilder.build;
-            OkHttpClientBuilder.build.implementation = function () {
+            OkHttpClientBuilder.build.implementation = function() {
                 try {
                     this.addInterceptor(ResponseInterceptor.$new());
                 } catch (e) {
@@ -573,11 +551,11 @@ waitForJava().then(() => {
             const BuildVersion = Java.use('android.os.Build$VERSION');
             const SDK_INT = BuildVersion.SDK_INT.value;
 
-            Java.scheduleOnMainThread(function () {
+            Java.scheduleOnMainThread(function() {
                 try {
                     const resources = context.getResources();
                     const displayMetrics = resources.getDisplayMetrics();
-                    const dpToPx = function (dp) {
+                    const dpToPx = function(dp) {
                         return Java.use('android.util.TypedValue').applyDimension(
                             TypedValue.COMPLEX_UNIT_DIP.value,
                             dp,
@@ -630,7 +608,7 @@ waitForJava().then(() => {
                         name: 'com.mentalist.DraggableIconListener',
                         implements: [Java.use('android.view.View$OnTouchListener')],
                         methods: {
-                            onTouch: function (view, event) {
+                            onTouch: function(view, event) {
                                 const action = event.getActionMasked();
                                 switch (action) {
                                     case MotionEvent.ACTION_DOWN.value:
@@ -758,7 +736,7 @@ waitForJava().then(() => {
                         name: 'com.mentalist.SectionButtonListener',
                         implements: [Java.use('android.view.View$OnClickListener')],
                         methods: {
-                            onClick: function (view) {
+                            onClick: function(view) {
                                 currentSection = 'players';
                                 showSection('players');
                             }
@@ -770,7 +748,7 @@ waitForJava().then(() => {
                         name: 'com.mentalist.SectionButtonListener2',
                         implements: [Java.use('android.view.View$OnClickListener')],
                         methods: {
-                            onClick: function (view) {
+                            onClick: function(view) {
                                 currentSection = 'messages';
                                 showSection('messages');
                             }
@@ -782,7 +760,7 @@ waitForJava().then(() => {
                         name: 'com.mentalist.SectionButtonListener3',
                         implements: [Java.use('android.view.View$OnClickListener')],
                         methods: {
-                            onClick: function (view) {
+                            onClick: function(view) {
                                 currentSection = 'mastermind';
                                 showSection('mastermind');
                             }
@@ -820,8 +798,8 @@ waitForJava().then(() => {
                         name: 'com.mentalist.CommandInputFocusListener',
                         implements: [Java.use('android.view.View$OnFocusChangeListener')],
                         methods: {
-                            onFocusChange: function (view, hasFocus) {
-                                Java.scheduleOnMainThread(function () {
+                            onFocusChange: function(view, hasFocus) {
+                                Java.scheduleOnMainThread(function() {
                                     try {
                                         if (menuParamsRef && windowManager && menuView && playersScroll) {
                                             if (hasFocus) {
@@ -856,7 +834,7 @@ waitForJava().then(() => {
                                                 menuParamsRef.y.value = originalMenuY;
                                                 windowManager.updateViewLayout(Java.cast(menuView, View), Java.cast(menuParamsRef, ViewGroupLayoutParams));
                                             }
-                                        } catch (e2) { }
+                                        } catch (e2) {}
                                     }
                                 });
                             }
@@ -866,7 +844,7 @@ waitForJava().then(() => {
                         name: 'com.mentalist.CommandInputListener',
                         implements: [Java.use('android.widget.TextView$OnEditorActionListener')],
                         methods: {
-                            onEditorAction: function (view, actionId, event) {
+                            onEditorAction: function(view, actionId, event) {
                                 try {
                                     const cmd = view.getText().toString();
                                     if (cmd) {
@@ -917,7 +895,7 @@ waitForJava().then(() => {
                         name: 'com.mentalist.MessagesSpinnerListener',
                         implements: [Java.use('android.widget.AdapterView$OnItemSelectedListener')],
                         methods: {
-                            onItemSelected: function (parent, view, position, id) {
+                            onItemSelected: function(parent, view, position, id) {
                                 try {
                                     if (position === 0) {
                                         gameState.selectedPlayerId = null;
@@ -933,9 +911,9 @@ waitForJava().then(() => {
                                         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP.value, 14.0);
                                     }
                                     scheduleUiUpdate();
-                                } catch (_) { }
+                                } catch (_) {}
                             },
-                            onNothingSelected: function (parent) { }
+                            onNothingSelected: function(parent) {}
                         }
                     }).$new());
                     messagesSectionView.addView(selectedPlayerSpinner);
@@ -1006,13 +984,13 @@ waitForJava().then(() => {
                         name: 'com.mentalist.PredictButtonListener',
                         implements: [Java.use('android.view.View$OnClickListener')],
                         methods: {
-                            onClick: function (view) {
+                            onClick: function(view) {
                                 try {
                                     const btn = Java.cast(view, Button);
                                     btn.setEnabled(false);
                                     btn.setText(JavaString.$new('Predicting...'));
                                     messageQueue.push(JSON.stringify({ type: 'predict_request' }));
-                                } catch (e) { }
+                                } catch (e) {}
                             }
                         }
                     }).$new());
@@ -1058,7 +1036,7 @@ waitForJava().then(() => {
         }
 
         rpc.exports = {
-            setviewdata: function (jsonStr) {
+            setviewdata: function(jsonStr) {
                 try {
                     latestRenderData = null;
                     if (jsonStr && typeof jsonStr === 'string') {
@@ -1070,7 +1048,7 @@ waitForJava().then(() => {
                     messageQueue.push(JSON.stringify({ type: 'log', message: '[SETVIEWDATA ERROR] ' + e.toString() }));
                 }
             },
-            seterror: function (errorStr) {
+            seterror: function(errorStr) {
                 try {
                     if (errorTextView && errorStr) {
                         const JavaString = Java.use('java.lang.String');
@@ -1080,11 +1058,11 @@ waitForJava().then(() => {
                     messageQueue.push(JSON.stringify({ type: 'log', message: '[SETERROR ERROR] ' + e.toString() }));
                 }
             },
-            setpredictresult: function (resultStr) {
+            setpredictresult: function(resultStr) {
                 try {
                     if (predictResultTextView && resultStr) {
                         const JavaString = Java.use('java.lang.String');
-                        Java.scheduleOnMainThread(function () {
+                        Java.scheduleOnMainThread(function() {
                             try {
                                 predictResultTextView.setText(JavaString.$new(resultStr));
                                 if (predictButton) {
@@ -1093,23 +1071,26 @@ waitForJava().then(() => {
                                     btn.setEnabled(true);
                                     btn.setText(JavaString.$new('Predict'));
                                 }
-                            } catch (e) { }
+                            } catch (e) {}
                         });
                     }
                 } catch (e) {
                     messageQueue.push(JSON.stringify({ type: 'log', message: '[SETPREDICTRESULT ERROR] ' + e.toString() }));
                 }
             },
-            togglemenu: function () {
+            togglemenu: function() {
                 toggleMenu();
                 return isMenuVisible;
             },
-            getqueuedmessages: function () {
+            getqueuedmessages: function() {
                 if (messageQueue.length === 0) {
                     return null;
                 }
                 const messages = messageQueue.splice(0, messageQueue.length);
                 return JSON.stringify(messages);
+            },
+            sendinvite: function(targetPlayerId) {
+                return sendSingleInvite(targetPlayerId);
             }
         };
 
