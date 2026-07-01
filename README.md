@@ -55,8 +55,8 @@ Mentalist Mobile is a JavaScript mobile automation agent. It communicates with a
 ### Installation
 
 ```sh
-git clone "https://github.com/IlluzyonistCode/Mentalist Mobile"
-cd "Mentalist Mobile"
+git clone "https://github.com/IlluzyonistCode/MentalistMobile"
+cd "MentalistMobile"
 npm install
 ```
 
@@ -70,9 +70,9 @@ node index.js
 
 ## Contributing
 
-- [Report Issues](https://github.com/IlluzyonistCode/Mentalist Mobile/issues)
-- [Submit Pull Requests](https://github.com/IlluzyonistCode/Mentalist Mobile/pulls)
-- [Discussions](https://github.com/IlluzyonistCode/Mentalist Mobile/discussions)
+- [Report Issues](https://github.com/IlluzyonistCode/MentalistMobile/issues)
+- [Submit Pull Requests](https://github.com/IlluzyonistCode/MentalistMobile/pulls)
+- [Discussions](https://github.com/IlluzyonistCode/MentalistMobile/discussions)
 
 ---
 
