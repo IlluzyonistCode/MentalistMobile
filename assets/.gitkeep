@@ -1,0 +1,7 @@
+# Поместите сюда:
+#   libfrida-gadget.so
+#   mentalist.keystore
+#   mentalist-mobile.png
+#   mentalist-logo.png
+#   *.svg
+#   Исходный com.werewolfapps.online*.apk (для build_apk.py)

@@ -1,6 +1,5 @@
 import shutil
 import subprocess
-import os
 import sys
 import hashlib
 import random
@@ -239,13 +238,13 @@ class MobileBuildOrchestrator:
         self.build_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
         self.protection_modules = [
-            'auth_client.py',
-            'auth_decorator.py',
-            'auth_protection.py'
+            'server/auth_client.py',
+            'server/auth_decorator.py',
+            'server/auth_protection.py'
         ]
         
         self.core_modules = [
-            'run_mod.py'
+            'server/run_mod.py'
         ]
         
         self.additional_files = [
@@ -332,7 +331,7 @@ class MobileBuildOrchestrator:
             src = self.project_root / module
 
             if src.exists():
-                shutil.copy2(src, self.temp_build_env / module)
+                shutil.copy2(src, self.temp_build_env / src.name)
 
                 self.print_info(f'Copied: {module}')
 
@@ -340,7 +339,7 @@ class MobileBuildOrchestrator:
             src = self.project_root / module
 
             if src.exists():
-                shutil.copy2(src, self.temp_build_env / module)
+                shutil.copy2(src, self.temp_build_env / src.name)
 
                 self.print_info(f'Copied: {module}')
 
@@ -348,7 +347,7 @@ class MobileBuildOrchestrator:
             src = self.project_root / filename
 
             if src.exists():
-                shutil.copy2(src, self.temp_build_env / filename)
+                shutil.copy2(src, self.temp_build_env / src.name)
 
                 self.print_info(f'Copied: {filename}')
         
@@ -428,12 +427,12 @@ class MobileBuildOrchestrator:
         self.print_step('Calculating integrity hashes...')
 
         for module in self.protection_modules + self.core_modules:
-            module_path = self.temp_build_env / module
+            module_path = self.temp_build_env / Path(module).name
 
             if module_path.exists():
-                self.integrity_manager.register_py_file(module_path, module)
+                self.integrity_manager.register_py_file(module_path, Path(module).name)
                 
-                file_hash = self.integrity_manager.py_hashes.get(module)
+                file_hash = self.integrity_manager.py_hashes.get(Path(module).name)
                 
                 if file_hash:
                     self.print_info(f'{module}: {file_hash[:16]}...')
@@ -443,13 +442,16 @@ class MobileBuildOrchestrator:
     def compile_protection_modules(self):
         self.print_step('Compiling protection modules...')
         
+        # Cython компилирует уже скопированные плоские файлы в temp sandbox
+        flat_modules = [Path(m).name for m in self.protection_modules]
+
         setup_code = f'''
 from setuptools import setup
 from Cython.Build import cythonize
 
 setup(
     ext_modules=cythonize(
-        {self.protection_modules},
+        {flat_modules},
         compiler_directives={{
             'language_level': '3',
             'always_allow_keywords': True,
@@ -483,10 +485,10 @@ setup(
                 return False
 
             for module in self.protection_modules:
-                base_name = module.replace('.py', '')
+                base_name = Path(module).stem
 
                 pyd_files = list(self.temp_build_env.glob(f'{base_name}*.pyd'))
-                so_files = list(self.temp_build_env.glob(f'{base_name}*.so'))
+                so_files  = list(self.temp_build_env.glob(f'{base_name}*.so'))
                 
                 compiled_files = pyd_files + so_files
                 
@@ -564,7 +566,7 @@ setup(
 
         for item in self.temp_build_env.iterdir():
             if item.suffix in ['.pyd', '.so', '.py', '.js', '.txt']:
-                if item.suffix == '.py' and item.stem in [m.replace('.py', '') for m in self.protection_modules]:
+                if item.suffix == '.py' and item.stem in [Path(m).stem for m in self.protection_modules]:
                     compiled_exists = any(
                         self.temp_build_env.glob(f'{item.stem}*.pyd')
                     ) or any(

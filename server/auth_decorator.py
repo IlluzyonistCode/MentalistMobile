@@ -1,3 +1,5 @@
+import os
+from pathlib import Path
 import time
 import random
 import traceback
@@ -74,7 +76,8 @@ def require_module_auth(module_name):
 					return
 			
 			try:
-				config = dotenv_values('config.txt')
+				_cfg_path = os.environ.get('CONFIG_PATH') or str(Path(__file__).parent.parent / 'config.txt')
+				config = dotenv_values(_cfg_path)
 			except Exception as e:
 				print(f'{Style.BRIGHT}{Back.RED}Configuration Error: Cannot read config.txt file - {str(e)}{Back.RESET}')
 				

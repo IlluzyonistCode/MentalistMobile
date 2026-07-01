@@ -1,0 +1,7 @@
+aiohttp
+colorama
+cryptography
+frida
+frida-tools
+python-dotenv
+requests

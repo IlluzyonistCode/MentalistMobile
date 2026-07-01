@@ -180,12 +180,11 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
-# APK data
+# Project files
 com.werewolfapps.online/
+.mentalist_data/
+config.txt
+agent.js
 *.apk
 *.keystore
 *.idsig
-
-# Data
-.mentalist_data/
-config.txt
